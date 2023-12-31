@@ -35,11 +35,11 @@ const PAWN_CAPTURE_LOOKUP: [[Bitboard; 64]; 2] = generate_pawn_capture_lookup();
 
 #[derive(Debug, Clone)]
 pub struct Board {
+    pub moves: Vec<Move>,
     pub state: State,
-    pub past_states: Vec<State>,
     pub pieces: BothColors<PieceBitboards>,
     pub pinned: Bitboard,
-    pub checkers: Bitboard,
+    pub check_masks: [Option<(Square, Bitboard, Option<Bitboard>)>; 2],
 }
 
 impl Default for Board {
@@ -121,44 +121,56 @@ impl Board {
         Self::rays(&BISHOP_MAGIC, sq)
     }
 
-    fn generate_castling_moves<T>(&mut self, color: &Color, mut callback: T)    where
-        T: FnMut(&mut Self, &Move), {
-            let blockers = self.pieces[color].all | self.pieces[!color].all;
-            let mut move_caller = |board: &mut Self, is_kingside: bool, rook_file: File, king_dest_file: File, rook_dest_file: File|{
-                let king_sq = Square::from_rank_file(Rank::First.pov(color), File::E);
-                let rook_sq = Square::from_rank_file(Rank::First.pov(color), rook_file);
-                let rook_dest_sq = Square::from_rank_file(Rank::First.pov(color), king_dest_file);
-                let king_dest_sq = Square::from_rank_file(Rank::First.pov(color), rook_dest_file);
+    fn generate_castling_moves<T>(&mut self, color: &Color, mut callback: T)
+    where
+        T: FnMut(&mut Self, &Move),
+    {
+        let blockers = self.pieces[color].all | self.pieces[!color].all;
+        let mut move_caller = |board: &mut Self,
+                               is_kingside: bool,
+                               rook_file: File,
+                               king_dest_file: File,
+                               rook_dest_file: File| {
+            let king_sq = Square::from_rank_file(Rank::First.pov(color), File::E);
+            let rook_sq = Square::from_rank_file(Rank::First.pov(color), rook_file);
+            let rook_dest_sq = Square::from_rank_file(Rank::First.pov(color), rook_dest_file);
+            let king_dest_sq = Square::from_rank_file(Rank::First.pov(color), king_dest_file);
 
-                let sqs_between = BETWEEN_LOOKUP[king_sq.idx()][rook_sq.idx()];
-                let a1 = board.sq_is_attacked(color, &rook_dest_sq);
-                let a2 = board.sq_is_attacked(color, &king_dest_sq);
+            let sqs_between = BETWEEN_LOOKUP[king_sq.idx()][rook_sq.idx()];
+            let a1 = board.sq_is_attacked_by(&rook_dest_sq, !color);
+            let a2 = board.sq_is_attacked_by(&king_dest_sq, !color);
 
-                if sqs_between.is_empty() && !a1 && !a1 {
-                    callback(board, &Move{
+            if (blockers & sqs_between).is_empty() && !a1 && !a2 {
+                callback(
+                    board,
+                    &Move {
                         piece: Piece::King,
                         from: king_sq,
                         to: king_dest_sq,
                         flag: if is_kingside {
-                            MoveFlag::KingSideCastles}
-                            else {
-                                MoveFlag::QueenSideCastles
-                            },
+                            MoveFlag::KingSideCastles
+                        } else {
+                            MoveFlag::QueenSideCastles
+                        },
                         promotion: None,
                         old_castling: board.state.castling,
                         old_ep_file: board.state.ep_file,
-                    })
-                }
-            };
-            if self.checkers.is_empty() {
+                    },
+                )
+            }
+        };
+        match self.check_masks {
+            [None, None] => {
                 if self.state.castling[color].king_side {
                     move_caller(self, true, File::H, File::G, File::F);
                 }
                 if self.state.castling[color].queen_side {
-                    move_caller(self, true, File::A, File::C, File::D);
+                    move_caller(self, false, File::A, File::C, File::D);
                 }
             }
+            _ => {}
         }
+    }
 
     pub fn generate_moves<T>(&mut self, mut callback: T)
     where
@@ -166,25 +178,86 @@ impl Board {
     {
         let active_color = &self.state.active_color.clone();
         let opp_color = !active_color;
-        let self_king_sq_idx = self.pieces[active_color].king.clone().next_sq().expect("king should always exist").idx();
+        let self_king_sq_idx = self.pieces[active_color]
+            .king
+            .clone()
+            .next_sq()
+            .expect("king should always exist")
+            .idx();
 
-        // This assumes only one checker. But check_mask is not used in king movegen anyways and if we are in double check thats the only one that happens.
-        let check_mask = if let Some(checker_sq) = self.checkers.clone().next_sq() {
-            Some(BETWEEN_LOOKUP[checker_sq.idx()][self_king_sq_idx])
-        } else {
-            None
+        let king_check_mask = match self.check_masks {
+            [Some((_, ray1, _)), Some((_, ray2, _))] => Some(!(ray1 | ray2)),
+            [Some((sq, ray, _)), None] => Some(sq.bitboard() | !ray),
+            [None, Some((sq, ray, _))] => Some(sq.bitboard() | !ray),
+            [None, None] => None,
         };
 
-        self.generate_any_moves(Piece::King,active_color, opp_color, self_king_sq_idx, check_mask, &mut callback);
+        let block_check_mask = match self.check_masks {
+            // cant block double check, this won't be used anyways
+            [Some(_), Some(_)] => None,
+            [Some((sq, _, in_between)), None] => {
+                Some(sq.bitboard() | in_between.unwrap_or(Bitboard::EMPTY))
+            }
+            [None, Some((sq, _, in_between))] => {
+                Some(sq.bitboard() | in_between.unwrap_or(Bitboard::EMPTY))
+            }
+            [None, None] => None,
+        };
 
-        // Only gen other moves if not in double check
-        if self.checkers.sq_count() < 2 {
-            self.generate_castling_moves(active_color, &mut callback);
-            self.generate_pawn_moves(active_color, opp_color, self_king_sq_idx, check_mask, &mut callback);
-            self.generate_any_moves(Piece::Queen, active_color, opp_color, self_king_sq_idx, check_mask, &mut callback);
-            self.generate_any_moves(Piece::Rook,active_color, opp_color, self_king_sq_idx, check_mask, &mut callback);
-            self.generate_any_moves(Piece::Bishop,active_color, opp_color, self_king_sq_idx, check_mask,&mut callback);
-            self.generate_any_moves(Piece::Knight,active_color, opp_color, self_king_sq_idx, check_mask,&mut callback);
+        self.generate_any_moves(
+            Piece::King,
+            active_color,
+            opp_color,
+            self_king_sq_idx,
+            king_check_mask,
+            &mut callback,
+        );
+
+        match self.check_masks {
+            [Some(_), Some(_)] => {}
+            // Only gen other moves if not in double check
+            _ => {
+                self.generate_castling_moves(active_color, &mut callback);
+                self.generate_pawn_moves(
+                    active_color,
+                    opp_color,
+                    self_king_sq_idx,
+                    block_check_mask,
+                    &mut callback,
+                );
+                self.generate_any_moves(
+                    Piece::Queen,
+                    active_color,
+                    opp_color,
+                    self_king_sq_idx,
+                    block_check_mask,
+                    &mut callback,
+                );
+                self.generate_any_moves(
+                    Piece::Rook,
+                    active_color,
+                    opp_color,
+                    self_king_sq_idx,
+                    block_check_mask,
+                    &mut callback,
+                );
+                self.generate_any_moves(
+                    Piece::Bishop,
+                    active_color,
+                    opp_color,
+                    self_king_sq_idx,
+                    block_check_mask,
+                    &mut callback,
+                );
+                self.generate_any_moves(
+                    Piece::Knight,
+                    active_color,
+                    opp_color,
+                    self_king_sq_idx,
+                    block_check_mask,
+                    &mut callback,
+                );
+            }
         }
     }
 
@@ -239,8 +312,8 @@ impl Board {
 
         let piece_bb = self.pieces[active_color][&piece];
 
-        let get_moves_bb = |board: &mut Self, from: &Square| match piece {
-            Piece::King => Self::get_king_moves(from).into_iter().fold(Bitboard::EMPTY, |mut acc, sq|{if !board.sq_is_attacked(active_color, &sq) {acc|=sq.bitboard()}acc}),
+        let get_moves_bb = |from: &Square| match piece {
+            Piece::King => Self::get_king_moves(from),
             Piece::Knight => Self::get_knight_moves(from),
             Piece::Bishop => Self::get_bishop_moves(from, opp_all | self_all),
             Piece::Rook => Self::get_rook_moves(from, opp_all | self_all),
@@ -249,18 +322,24 @@ impl Board {
         };
 
         for from in piece_bb {
-            let mut moves = get_moves_bb(self, &from) & !self_all;
+            let mut moves = get_moves_bb(&from) & !self_all;
 
-            if piece != Piece::King {
-                if let Some(check_mask) = check_mask {
-                    moves &= check_mask;
-                }
-            }
+            if let Some(check_mask) = check_mask {
+                moves &= check_mask;
+            };
+
+            if piece == Piece::King {
+                moves = moves.into_iter().fold(Bitboard::EMPTY, |mut acc, sq| {
+                    if !self.sq_is_attacked_by(&sq, opp_color) {
+                        acc |= sq.bitboard()
+                    }
+                    acc
+                })
+            };
 
             if self.pinned.has_sq(from) {
                 moves &= BETWEEN_RAY_LOOKUP[from.idx()][self_king_sq_idx];
             }
-
             let mut move_caller = |board: &mut Self, to: Square, flag: MoveFlag| {
                 callback(
                     board,
@@ -300,12 +379,12 @@ impl Board {
         T: FnMut(&mut Self, &Move),
     {
         let opp_all = self.pieces[opp_color].all;
-        let self_all = self.pieces[&active_color].all;
-        let pawns = self.pieces[&active_color].pawn;
+        let self_all = self.pieces[active_color].all;
+        let pawns = self.pieces[active_color].pawn;
 
         for from in pawns {
             let mut move_caller = |board: &mut Self, to: Square, flag: MoveFlag| {
-                if to.rank() == Rank::Eighth.pov(&active_color) {
+                if to.rank() == Rank::Eighth.pov(active_color) {
                     for p in Promotion::ALL {
                         callback(
                             board,
@@ -336,27 +415,50 @@ impl Board {
                 }
             };
 
-            let mask = if self.pinned.has_sq(from) {
+            let pin_mask = if self.pinned.has_sq(from) {
                 BETWEEN_RAY_LOOKUP[from.idx()][self_king_sq_idx]
             } else {
                 Bitboard::FULL
-            } & if let Some(check_mask) = check_mask {
+            };
+            let check_mask = if let Some(check_mask) = check_mask {
                 check_mask
             } else {
                 Bitboard::FULL
             };
+            let mask = pin_mask & check_mask;
 
-            let captures = Self::get_pawn_attacks(&from, &active_color) & mask;
+            // no check mask for now because ep can capture checker without target square being in check mask
+            let captures = Self::get_pawn_attacks(&from, active_color) & pin_mask;
             if let Some(ep_file) = self.state.ep_file {
-                let to = Square::ep_move_sq(&opp_color, ep_file);
-                if captures.has_sq(to) {
-                    move_caller(self, to, MoveFlag::EnPassant)
+                let to = Square::ep_move_sq(opp_color, ep_file);
+                let ep_pawn_sq = Square::ep_pawn_sq(opp_color, ep_file);
+                if captures.has_sq(to) && check_mask.has_sq(ep_pawn_sq) {
+                    let opp_qr = self.pieces[opp_color].queen | self.pieces[opp_color].rook;
+                    let mut can_capture = true;
+                    for ep_pinner_sq in BETWEEN_RAY_LOOKUP[self_king_sq_idx][from.idx()] & opp_qr {
+                        let mut ib_pieces = BETWEEN_LOOKUP[self_king_sq_idx][ep_pinner_sq.idx()]
+                            & (self_all | opp_all);
+                        let rel_pieces = (ib_pieces.next(), ib_pieces.next_sq(), ib_pieces.next_sq());
+                        
+                        if (Some(from), Some(ep_pawn_sq), None) == rel_pieces {
+                            can_capture = false;
+                            break;
+                        } else if (Some(ep_pawn_sq), Some(from), None) == rel_pieces {
+                            can_capture = false;
+                            break;
+                        }
+                    }
+                    
+                    if can_capture {
+                        move_caller(self, to, MoveFlag::EnPassant)
+                    }
                 }
             }
-            let captures = captures & opp_all;
+            // add check mask for other captures
+            let captures = captures & check_mask & opp_all;
             for to in captures {
                 for piece in &Piece::ALL {
-                    if self.pieces[&opp_color][piece].has_sq(to) {
+                    if self.pieces[opp_color][piece].has_sq(to) {
                         move_caller(self, to, MoveFlag::Capture(*piece))
                     }
                 }
@@ -366,15 +468,20 @@ impl Board {
                 Color::Black => -8,
             });
 
+            // if to == Square::D6 {
+            //     println!("CHECK MASK {} PIN MASK{}", check_mask.unwrap_or(Bitboard::FULL), self.pinned);
+            // }
+
             if (mask & !(self_all | opp_all)).has_sq(to) {
                 move_caller(self, to, MoveFlag::None)
             }
-            if from.rank() == Rank::Second.pov(&active_color) {
+            if from.rank() == Rank::Second.pov(active_color) {
                 let to = from.increment(match active_color {
                     Color::White => 16,
                     Color::Black => -16,
                 });
-                if (BETWEEN_LOOKUP[from.idx()][to.idx()] & (opp_all | self_all)).is_empty()
+                if ((BETWEEN_LOOKUP[from.idx()][to.idx()] | to.bitboard()) & (opp_all | self_all))
+                    .is_empty()
                     && mask.has_sq(to)
                 {
                     move_caller(self, to, MoveFlag::PawnFirstMove)
@@ -388,8 +495,16 @@ impl Board {
         self.pieces[color].all ^= sq.bitboard();
     }
 
+    fn add_checker(&mut self, input: (Square, Bitboard, Option<Bitboard>)) {
+        let s = &mut self.check_masks;
+        match s {
+            [None, None] => s[0] = Some(input),
+            [Some(_), None] => s[1] = Some(input),
+            _ => unreachable!("self.checkers should not have this conf"),
+        }
+    }
+
     pub fn update_slider_checks_pins(&mut self, color: &Color) {
-        self.checkers = Bitboard::EMPTY;
         self.pinned = Bitboard::EMPTY;
         let opp_king_sq = self.pieces[&!color]
             .king
@@ -401,17 +516,19 @@ impl Board {
             });
         let self_all = self.pieces[color].all;
         let opp_all = self.pieces[!color].all;
-        let self_qr = self.pieces[color].queen | self.pieces[color].bishop;
+        let self_qb = self.pieces[color].queen | self.pieces[color].bishop;
         let self_qr = self.pieces[color].queen | self.pieces[color].rook;
 
         let rays =
-            (self_qr & Self::rook_rays(&opp_king_sq)) | (self_qr & Self::bishop_rays(&opp_king_sq));
+            (self_qr & Self::rook_rays(&opp_king_sq)) | (self_qb & Self::bishop_rays(&opp_king_sq));
 
         for ray_sq in rays {
-            let pinned = BETWEEN_LOOKUP[ray_sq.idx()][opp_king_sq.idx()] & (opp_all | self_all);
+            let ray = BETWEEN_RAY_LOOKUP[ray_sq.idx()][opp_king_sq.idx()];
+            let in_between = BETWEEN_LOOKUP[ray_sq.idx()][opp_king_sq.idx()];
+            let pinned = in_between & (opp_all | self_all);
 
             match pinned.sq_count() {
-                0 => self.checkers |= ray_sq.bitboard(),
+                0 => self.add_checker((ray_sq, ray, Some(in_between))),
                 1 => self.pinned |= pinned,
                 _ => {}
             }
@@ -443,9 +560,12 @@ impl Board {
         }
     }
 
-    fn sq_is_attacked(&self, color: &Color, sq: &Square) -> bool {
+    fn sq_is_attacked_by(&self, sq: &Square, color: &Color) -> bool {
         for p in &Piece::ALL {
-            if !(self.pieces[!color][p] & self.get_attacks(p, color, sq)).is_empty() {
+            let attacks = self.get_attacks(p, !color, sq);
+            let pieces = self.pieces[color][p];
+            // println!("SQ {:?} PIECE {:?} PIECES {} ATTAKCS {}", sq, p, pieces, attacks);
+            if !(pieces & attacks).is_empty() {
                 return true;
             }
         }
@@ -453,6 +573,8 @@ impl Board {
     }
 
     fn toggle_kingside_castles(&mut self, color: &Color) {
+        let c = &mut self.state.castling[color].king_side;
+        *c = !*c;
         self.toggle_sq(
             color,
             &Piece::Rook,
@@ -466,6 +588,8 @@ impl Board {
     }
 
     fn toggle_queenside_castles(&mut self, color: &Color) {
+        let c = &mut self.state.castling[color].queen_side;
+        *c = !*c;
         self.toggle_sq(
             color,
             &Piece::Rook,
@@ -479,18 +603,28 @@ impl Board {
     }
 
     pub fn make_move(&mut self, mv: &Move) {
-        let active_color = self.state.active_color;
+        self.moves.push(*mv);
+        self.check_masks = [None, None];
+        let active_color = &self.state.active_color.clone();
         let opp_color = !active_color;
 
-        self.toggle_sq(&active_color, &mv.piece, &mv.from);
-        self.toggle_sq(&active_color, &mv.piece, &mv.to);
+        self.state.ep_file = None;
+        self.toggle_sq(active_color, &mv.piece, &mv.from);
+
+        match mv.promotion {
+            Some(Promotion::Queen) => self.toggle_sq(active_color, &Piece::Queen, &mv.to),
+            Some(Promotion::Rook) => self.toggle_sq(active_color, &Piece::Rook, &mv.to),
+            Some(Promotion::Bishop) => self.toggle_sq(active_color, &Piece::Bishop, &mv.to),
+            Some(Promotion::Knight) => self.toggle_sq(active_color, &Piece::Knight, &mv.to),
+            None => self.toggle_sq(active_color, &mv.piece, &mv.to),
+        }
 
         match &mv.flag {
             MoveFlag::None => {}
             MoveFlag::Capture(piece) => {
-                self.toggle_sq(&opp_color, piece, &mv.to);
+                self.toggle_sq(opp_color, piece, &mv.to);
                 if *piece == Piece::Rook {
-                    let c = &mut self.state.castling[&opp_color];
+                    let c = &mut self.state.castling[opp_color];
                     match mv.from.file() {
                         File::A => c.queen_side = false,
                         File::H => c.king_side = false,
@@ -500,24 +634,24 @@ impl Board {
             }
             MoveFlag::PawnFirstMove => self.state.ep_file = Some(mv.to.file()),
             MoveFlag::EnPassant => self.toggle_sq(
-                &opp_color,
+                opp_color,
                 &Piece::Pawn,
-                &Square::ep_pawn_sq(&opp_color, mv.to.file()),
+                &Square::ep_pawn_sq(opp_color, mv.to.file()),
             ),
-            MoveFlag::KingSideCastles => self.toggle_kingside_castles(&active_color),
-            MoveFlag::QueenSideCastles => self.toggle_queenside_castles(&active_color),
+            MoveFlag::KingSideCastles => self.toggle_kingside_castles(active_color),
+            MoveFlag::QueenSideCastles => self.toggle_queenside_castles(active_color),
         }
 
         match mv.piece {
             Piece::King => {
-                let c = &mut self.state.castling[&active_color];
+                let c = &mut self.state.castling[active_color];
                 c.king_side = false;
                 c.queen_side = false;
             }
             Piece::Rook => {
-                let c = &mut self.state.castling[&active_color];
-                let starting_rank = Rank::First.pov(&active_color);
-                if mv.from.rank() == Rank::First.pov(&active_color) {
+                let c = &mut self.state.castling[active_color];
+                let starting_rank = Rank::First.pov(active_color);
+                if mv.from.rank() == Rank::First.pov(active_color) {
                     match mv.from.file() {
                         File::A => c.queen_side = false,
                         File::H => c.king_side = false,
@@ -525,48 +659,91 @@ impl Board {
                     }
                 }
             }
+            //d2d3, g8f6, e1d2, f6e4, c2c3, e4d2,
+            Piece::Knight => {
+                let moves = Self::get_knight_moves(&mv.to);
+                if !(moves & self.pieces[opp_color].king).is_empty() {
+                    self.add_checker((mv.to, moves, None));
+                }
+            }
+            Piece::Pawn => {
+                let moves = Self::get_pawn_attacks(&mv.to, active_color);
+                if !(moves & self.pieces[opp_color].king).is_empty() {
+                    self.add_checker((mv.to, moves, None));
+                }
+            }
 
             _ => {}
         }
 
-        self.update_slider_checks_pins(&active_color);
+        self.update_slider_checks_pins(active_color);
 
         self.state.half_move_count += 1;
-        if active_color == Color::Black {
+        if *active_color == Color::Black {
             self.state.full_move_count += 1;
         }
-        self.state.active_color = opp_color;
+        self.state.active_color = *opp_color;
     }
 
     fn unmake_move(&mut self, mv: &Move) {
-        let opp_color = self.state.active_color;
+        self.moves.pop();
+        self.check_masks = [None, None];
+        let opp_color = &self.state.active_color.clone();
         let undoing_color = !opp_color;
 
         self.toggle_sq(&undoing_color, &mv.piece, &mv.from);
-        self.toggle_sq(&undoing_color, &mv.piece, &mv.to);
+
+        match mv.promotion {
+            Some(Promotion::Queen) => self.toggle_sq(&undoing_color, &Piece::Queen, &mv.to),
+            Some(Promotion::Rook) => self.toggle_sq(&undoing_color, &Piece::Rook, &mv.to),
+            Some(Promotion::Bishop) => self.toggle_sq(&undoing_color, &Piece::Bishop, &mv.to),
+            Some(Promotion::Knight) => self.toggle_sq(&undoing_color, &Piece::Knight, &mv.to),
+            None => self.toggle_sq(&undoing_color, &mv.piece, &mv.to),
+        }
 
         match &mv.flag {
             MoveFlag::None => {}
-            MoveFlag::Capture(piece) => self.toggle_sq(&opp_color, &piece, &mv.to),
+            MoveFlag::Capture(piece) => self.toggle_sq(opp_color, &piece, &mv.to),
             MoveFlag::PawnFirstMove => {}
             MoveFlag::EnPassant => self.toggle_sq(
-                &opp_color,
+                opp_color,
                 &Piece::Pawn,
-                &Square::ep_pawn_sq(&opp_color, mv.to.file()),
+                &Square::ep_pawn_sq(opp_color, mv.to.file()),
             ),
             MoveFlag::KingSideCastles => self.toggle_kingside_castles(&undoing_color),
             MoveFlag::QueenSideCastles => self.toggle_queenside_castles(&undoing_color),
         }
 
-        self.update_slider_checks_pins(&undoing_color);
+        match &mv.piece {
+            Piece::King => {
+                let moves = Self::get_knight_moves(&mv.from);
+
+                for checker_sq in moves & self.pieces[opp_color].knight {
+                    self.add_checker((checker_sq, Self::get_knight_moves(&checker_sq), None));
+                }
+
+                let moves = Self::get_pawn_attacks(&mv.from, &undoing_color);
+
+                for checker_sq in moves & self.pieces[opp_color].pawn {
+                    self.add_checker((
+                        checker_sq,
+                        Self::get_pawn_attacks(&mv.from, opp_color),
+                        None,
+                    ));
+                }
+            }
+            _ => {}
+        }
+
+        self.update_slider_checks_pins(opp_color);
 
         self.state.castling = mv.old_castling;
         self.state.ep_file = mv.old_ep_file;
         self.state.half_move_count -= 1;
-        if undoing_color == Color::Black {
+        if *undoing_color == Color::Black {
             self.state.full_move_count -= 1;
         }
-        self.state.active_color = undoing_color;
+        self.state.active_color = *undoing_color;
     }
 
     fn generate_moves_recursively<F>(&mut self, max_ply: u8, current_ply: u8, on_move: &mut F)
@@ -600,6 +777,7 @@ impl Board {
         let mut moves: HashMap<String, usize> = HashMap::with_capacity(20);
         let mut curr_move: Option<(String, usize)> = None;
         let mut on_move = |_: &mut Self, mv: &Move, current_ply: u8| {
+            println!("{}{}", "  ".repeat(current_ply as usize), mv.to_string());
             if let Some((mv, count)) = &mut curr_move {
                 if current_ply == 1 {
                     moves.insert(
@@ -676,6 +854,24 @@ impl Board {
             } else {
                 "-".to_owned()
             }
+        );
+        let checkers = match self.check_masks {
+            [Some((sq1, _, _)), Some((sq2, _, _))] => sq1.bitboard() | sq2.bitboard(),
+            [Some((sq, _, _)), None] => sq.bitboard(),
+            [None, Some((sq, _, _))] => sq.bitboard(),
+            [None, None] => Bitboard::EMPTY
+        };
+        println!(
+            "\rCheckers: {}             \r",
+            checkers
+        );
+        println!("\rPinned: {}             \r", self.pinned);
+        println!(
+            "\rMoves: {}             \r",
+            self.moves.iter().fold(String::new(), |mut acc, mv| {
+                acc += &format!("{}, ", mv.to_string());
+                acc
+            })
         )
     }
 }
@@ -778,6 +974,7 @@ mod tests {
         assert_eq!(board.count(2).1, 400);
         assert_eq!(board.count(3).1, 8902);
         assert_eq!(board.count(4).1, 197281);
+        assert_eq!(board.count(5).1, 4865609)
     }
 
     // See https://www.chessprogramming.org/Perft_Results for positions
@@ -790,6 +987,7 @@ mod tests {
         assert_eq!(board.count(2).1, 2039);
         assert_eq!(board.count(3).1, 97862);
         assert_eq!(board.count(4).1, 4085603);
+        assert_eq!(board.count(5).1, 193690690);
     }
 
     #[test]
@@ -800,6 +998,7 @@ mod tests {
         assert_eq!(board.count(2).1, 191);
         assert_eq!(board.count(3).1, 2812);
         assert_eq!(board.count(4).1, 43238);
+        assert_eq!(board.count(5).1, 674624);
     }
 
     #[test]
@@ -811,6 +1010,7 @@ mod tests {
         assert_eq!(board.count(2).1, 264);
         assert_eq!(board.count(3).1, 9467);
         assert_eq!(board.count(4).1, 422333);
+        assert_eq!(board.count(5).1, 15833292);
     }
 
     #[test]
@@ -822,5 +1022,6 @@ mod tests {
         assert_eq!(board.count(2).1, 1486);
         assert_eq!(board.count(3).1, 62379);
         assert_eq!(board.count(4).1, 2103487);
+        assert_eq!(board.count(5).1, 89941194)
     }
 }

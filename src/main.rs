@@ -46,11 +46,13 @@ fn _stockfish_diff() {
             insert_into_stockfish = true;
             continue;
         }
-        if let Some((m, _)) = line.split_once(": ") {
-            if insert_into_stockfish {
-                stockfish.insert(m);
-            } else {
-                joni.insert(m);
+        if let Some((m, c)) = line.split_once(": ") {
+            if let Ok(num) = c.parse::<usize>() {
+                if insert_into_stockfish {
+                    stockfish.insert((m, num));
+                } else {
+                    joni.insert((m, num));
+                }
             }
         }
     }

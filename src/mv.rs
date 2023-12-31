@@ -1,7 +1,7 @@
 use util::{
     bitboard::Bitboard,
     piece::Piece,
-    square::{File, Square},
+    square::{File, Square}, error::ChessError,
 };
 
 use crate::{both_colors::BothColors, state::Castling};
@@ -23,6 +23,18 @@ pub enum Promotion {
     Bishop,
     Rook,
     Queen,
+}
+
+impl Promotion {
+    pub fn from_str(input: &str) -> Result<Self, ChessError> {
+        match input {
+            "n" => Ok(Self::Knight),
+            "b" => Ok(Self::Bishop),
+            "r" => Ok(Self::Rook),
+            "q" => Ok(Self::Queen),
+            _ => Err(ChessError::Parse(format!("'{input}' cannot be used to construct a promotion")))
+        }
+    }
 }
 
 impl Promotion {

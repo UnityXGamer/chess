@@ -50,9 +50,9 @@ impl Board {
         };
 
         let mut board = Self {
-            past_states: Vec::new(),
+            moves: Vec::new(),
             pinned: Bitboard::EMPTY,
-            checkers: Bitboard::EMPTY,
+            check_masks: [None, None],
             pieces,
             state,
         };
@@ -65,7 +65,6 @@ impl Board {
 
 impl BothColors<PieceBitboards> {
     fn from_fen(fen_chunk: &str) -> Result<Self, ChessError> {
-        // FEN starts with 8th rank, but we want 1st rank first. So we start filling the array from the 'back'
         let mut rank = Rank::Eighth;
 
         let ranks = fen_chunk.split("/");
@@ -108,14 +107,14 @@ impl BothColors<PieceBitboards> {
                     bitboards[color][piece] |= sq.bitboard();
                     bitboards[color].all |= sq.bitboard();
                     last_char_number = None;
+                }
 
-                    if file == File::H {
-                        continue;
-                    } else if let Some(next_file) = file.increment_checked(1) {
-                        file = next_file;
-                    } else {
-                        return Err(too_many_sqs);
-                    }
+                if file == File::H {
+                    continue;
+                } else if let Some(next_file) = file.increment_checked(1) {
+                    file = next_file;
+                } else {
+                    return Err(too_many_sqs);
                 }
             }
             println!("FILE {:?}", file);

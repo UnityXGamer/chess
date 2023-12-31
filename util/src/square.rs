@@ -1,4 +1,4 @@
-use crate::{bitboard::Bitboard, color::Color, error::ChessError};
+use crate::{bitboard::Bitboard, color::Color, error::ChessError, helper::impl_conv};
 
 chess_macro::make_ranks_files_squares!();
 
@@ -67,4 +67,88 @@ impl Square {
     pub const fn bitboard(&self) -> Bitboard {
         Bitboard(1 << *self as u8)
     }
+}
+
+impl Rank {
+    const FIRST: Bitboard = Bitboard(0xFF);
+    const SECOND: Bitboard = Bitboard(Self::FIRST.0 << 8);
+    const THIRD: Bitboard = Bitboard(Self::SECOND.0 << 8);
+    const FOURTH: Bitboard = Bitboard(Self::THIRD.0 << 8);
+    const FIFTH: Bitboard = Bitboard(Self::FOURTH.0 << 8);
+    const SIXTH: Bitboard = Bitboard(Self::FIFTH.0 << 8);
+    const SEVENTH: Bitboard = Bitboard(Self::SIXTH.0 << 8);
+    const EIGHTH: Bitboard = Bitboard(Self::SEVENTH.0 << 8);
+
+    pub fn bitboard(&self) -> Bitboard {
+        match self {
+            Self::First => Self::FIRST,
+            Self::Second => Self::SECOND,
+            Self::Third => Self::THIRD,
+            Self::Fourth => Self::FOURTH,
+            Self::Fifth => Self::FIFTH,
+            Self::Sixth => Self::SIXTH,
+            Self::Seventh => Self::SEVENTH,
+            Self::Eighth => Self::EIGHTH,
+        }
+    }
+
+    pub const fn pov(&self, color: &Color) -> Self {
+        match color {
+            Color::White => *self,
+            Color::Black => Self::from_u8(7 - *self as u8),
+        }
+    }
+}
+
+impl_conv! {
+    Rank,
+    char,
+    from_char,
+    to_char,
+    '1'=First,
+    '2'=Second,
+    '3'=Third,
+    '4'=Fourth,
+    '5'=Fifth,
+    '6'=Sixth,
+    '7'=Seventh,
+    '8'=Eighth
+}
+
+impl File {
+    const A_BB: Bitboard = Bitboard(0x0101010101010101);
+    const B_BB: Bitboard = Bitboard(Self::A_BB.0 << 1);
+    const C_BB: Bitboard = Bitboard(Self::B_BB.0 << 1);
+    const D_BB: Bitboard = Bitboard(Self::C_BB.0 << 1);
+    const E_BB: Bitboard = Bitboard(Self::D_BB.0 << 1);
+    const F_BB: Bitboard = Bitboard(Self::E_BB.0 << 1);
+    const G_BB: Bitboard = Bitboard(Self::F_BB.0 << 1);
+    const H_BB: Bitboard = Bitboard(Self::G_BB.0 << 1);
+    pub fn bitboard(&self) -> Bitboard {
+        match self {
+            Self::A => Self::A_BB,
+            Self::B => Self::B_BB,
+            Self::C => Self::C_BB,
+            Self::D => Self::D_BB,
+            Self::E => Self::E_BB,
+            Self::F => Self::F_BB,
+            Self::G => Self::G_BB,
+            Self::H => Self::H_BB,
+        }
+    }
+}
+
+impl_conv! {
+    File,
+    char,
+    from_char,
+    to_char,
+    'a'=A,
+    'b'=B,
+    'c'=C,
+    'd'=D,
+    'e'=E,
+    'f'=F,
+    'g'=G,
+    'h'=H
 }

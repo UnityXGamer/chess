@@ -8,6 +8,4 @@ pub mod lookup;
 pub mod magic;
 pub mod precomputed;
 
-mod file;
 mod helper;
-mod rank;
