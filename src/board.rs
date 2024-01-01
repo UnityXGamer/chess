@@ -33,9 +33,8 @@ const PAWN_CAPTURE_LOOKUP: [[Bitboard; 64]; 2] = generate_pawn_capture_lookup();
 // #[allow(long_running_const_eval)]
 // const ROOK_LOOKUP: [Bitboard; ROOK_LOOKUP_LEN] = ROOK.generate_lookup(&ROOK_MAGIC);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Board {
-    pub moves: Vec<Move>,
     pub state: State,
     pub pieces: BothColors<PieceBitboards>,
     pub pinned: Bitboard,
@@ -603,7 +602,6 @@ impl Board {
     }
 
     pub fn make_move(&mut self, mv: &Move) {
-        self.moves.push(*mv);
         self.check_masks = [None, None];
         let active_color = &self.state.active_color.clone();
         let opp_color = !active_color;
@@ -615,7 +613,13 @@ impl Board {
             Some(Promotion::Queen) => self.toggle_sq(active_color, &Piece::Queen, &mv.to),
             Some(Promotion::Rook) => self.toggle_sq(active_color, &Piece::Rook, &mv.to),
             Some(Promotion::Bishop) => self.toggle_sq(active_color, &Piece::Bishop, &mv.to),
-            Some(Promotion::Knight) => self.toggle_sq(active_color, &Piece::Knight, &mv.to),
+            Some(Promotion::Knight) => {
+                self.toggle_sq(active_color, &Piece::Knight, &mv.to);
+                let moves = Self::get_knight_moves(&mv.to);
+                if !(moves & self.pieces[opp_color].king).is_empty() {
+                    self.add_checker((mv.to, moves, None));
+                }
+            },
             None => self.toggle_sq(active_color, &mv.piece, &mv.to),
         }
 
@@ -623,9 +627,9 @@ impl Board {
             MoveFlag::None => {}
             MoveFlag::Capture(piece) => {
                 self.toggle_sq(opp_color, piece, &mv.to);
-                if *piece == Piece::Rook {
+                if *piece == Piece::Rook && mv.to.rank() == Rank::First.pov(opp_color) {
                     let c = &mut self.state.castling[opp_color];
-                    match mv.from.file() {
+                    match mv.to.file() {
                         File::A => c.queen_side = false,
                         File::H => c.king_side = false,
                         _ => {}
@@ -650,7 +654,6 @@ impl Board {
             }
             Piece::Rook => {
                 let c = &mut self.state.castling[active_color];
-                let starting_rank = Rank::First.pov(active_color);
                 if mv.from.rank() == Rank::First.pov(active_color) {
                     match mv.from.file() {
                         File::A => c.queen_side = false,
@@ -659,7 +662,6 @@ impl Board {
                     }
                 }
             }
-            //d2d3, g8f6, e1d2, f6e4, c2c3, e4d2,
             Piece::Knight => {
                 let moves = Self::get_knight_moves(&mv.to);
                 if !(moves & self.pieces[opp_color].king).is_empty() {
@@ -686,7 +688,6 @@ impl Board {
     }
 
     fn unmake_move(&mut self, mv: &Move) {
-        self.moves.pop();
         self.check_masks = [None, None];
         let opp_color = &self.state.active_color.clone();
         let undoing_color = !opp_color;
@@ -751,15 +752,11 @@ impl Board {
         F: FnMut(&mut Board, &Move, u8),
     {
         let callback = |board: &mut Self, mv: &Move| {
+            on_move(board, &mv, current_ply);
             if current_ply < max_ply {
-                board.make_move(&mv);
-                on_move(board, &mv, current_ply);
-                board.generate_moves_recursively(max_ply, current_ply + 1, on_move);
-                board.unmake_move(&mv);
-            } else {
-                board.make_move(&mv);
-                on_move(board, &mv, current_ply);
-                board.unmake_move(&mv);
+                let mut new_board = board.clone();
+                new_board.make_move(mv);
+                new_board.generate_moves_recursively(max_ply, current_ply + 1, on_move);
             }
         };
         self.generate_moves(callback);
@@ -776,8 +773,9 @@ impl Board {
     pub fn count(&mut self, ply: u8) -> (HashMap<String, usize>, usize) {
         let mut moves: HashMap<String, usize> = HashMap::with_capacity(20);
         let mut curr_move: Option<(String, usize)> = None;
+        let start = std::time::Instant::now();
         let mut on_move = |_: &mut Self, mv: &Move, current_ply: u8| {
-            println!("{}{}", "  ".repeat(current_ply as usize), mv.to_string());
+            // println!("{}{}", "  ".repeat(current_ply as usize), mv.to_string());
             if let Some((mv, count)) = &mut curr_move {
                 if current_ply == 1 {
                     moves.insert(
@@ -807,6 +805,10 @@ impl Board {
                 },
             );
         }
+        
+        let end = start.elapsed();
+        
+        
 
         let (to_print, total_count) =
             moves
@@ -816,7 +818,8 @@ impl Board {
                     acc.1 += count;
                     acc
                 });
-        print!("\n{}\nTotal: {}\n", to_print, total_count);
+        println!("{}\nTotal: {}", to_print, total_count);
+        println!("Million moves/sec: {}", 10f64.powf(-6.0) * total_count as f64/end.as_secs_f64());
         (moves, total_count)
     }
 
@@ -866,13 +869,6 @@ impl Board {
             checkers
         );
         println!("\rPinned: {}             \r", self.pinned);
-        println!(
-            "\rMoves: {}             \r",
-            self.moves.iter().fold(String::new(), |mut acc, mv| {
-                acc += &format!("{}, ", mv.to_string());
-                acc
-            })
-        )
     }
 }
 

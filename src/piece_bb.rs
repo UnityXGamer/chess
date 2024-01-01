@@ -1,7 +1,7 @@
 use std::ops::{Index, IndexMut};
 use util::{bitboard::Bitboard, piece::Piece};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct PieceBitboards {
     pub all: Bitboard,
     pub pawn: Bitboard,

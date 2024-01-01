@@ -50,7 +50,6 @@ impl Board {
         };
 
         let mut board = Self {
-            moves: Vec::new(),
             pinned: Bitboard::EMPTY,
             check_masks: [None, None],
             pieces,
