@@ -32,7 +32,7 @@ pub const fn get_magic_idx(magic: &Magic, blockers: Bitboard) -> usize {
     idx + magic.offset
 }
 
-pub(crate) const DELTAS: [(i8, i8); 8] = [
+pub const DELTAS: [(i8, i8); 8] = [
     (-1, 0),
     (0, -1),
     (1, 0),
@@ -42,9 +42,9 @@ pub(crate) const DELTAS: [(i8, i8); 8] = [
     (1, -1),
     (1, 1),
 ];
-pub(crate) const ORTHOGONALS: [(i8, i8); 4] = [DELTAS[0], DELTAS[1], DELTAS[2], DELTAS[3]];
+ const ORTHOGONALS: [(i8, i8); 4] = [DELTAS[0], DELTAS[1], DELTAS[2], DELTAS[3]];
 
-pub(crate) const DIAGONALS: [(i8, i8); 4] = [DELTAS[4], DELTAS[5], DELTAS[6], DELTAS[7]];
+ const DIAGONALS: [(i8, i8); 4] = [DELTAS[4], DELTAS[5], DELTAS[6], DELTAS[7]];
 
 pub struct Random(pub u64, pub u64);
 

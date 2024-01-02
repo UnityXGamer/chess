@@ -1,6 +1,5 @@
 use std::{env, fs, path::Path};
 use util::{
-    lookup::{between_lookup_code, king_lookup_code, knight_lookup_code},
     magic::{BISHOP, ROOK},
     precomputed::{BISHOP_MAGIC, ROOK_MAGIC},
 };

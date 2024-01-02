@@ -1,16 +1,12 @@
 use util::{
-    bitboard::Bitboard,
     piece::Piece,
-    square::{File, Square}, error::ChessError,
+    square::Square, error::ChessError,
 };
-
-use crate::{both_colors::BothColors, state::Castling};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MoveFlag {
     None,
     Capture(Piece),
-    /// stores the old ep_file
     PawnFirstMove,
     KingSideCastles,
     QueenSideCastles,
@@ -48,8 +44,6 @@ pub struct Move {
     pub to: Square,
     pub flag: MoveFlag,
     pub promotion: Option<Promotion>,
-    pub old_castling: BothColors<Castling>,
-    pub old_ep_file: Option<File>,
 }
 
 impl Move {

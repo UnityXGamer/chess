@@ -1,37 +1,29 @@
-use std::{collections::HashMap, thread, time::Duration};
-
-include!(concat!(env!("OUT_DIR"), "/lookup.rs"));
+use std::{thread, time::Duration};
 
 use crate::{
     both_colors::BothColors,
     mv::{Move, MoveFlag, Promotion},
     piece_bb::PieceBitboards,
     state::State,
+    movegen::{
+        pawn_attacks,
+        knight_moves,
+        bishop_moves,
+        bishop_rays,
+        rook_moves,
+        rook_rays,
+        queen_moves,
+        sq_between,
+        ray_between, king_moves
+    }
 };
 
 use util::{
     bitboard::Bitboard,
     color::Color,
-    lookup::{
-        generate_between_lookup, generate_between_ray_lookup, generate_king_lookup,
-        generate_knight_lookup, generate_pawn_capture_lookup,
-    },
-    magic::{get_magic_idx, Magic},
     piece::Piece,
-    square::{File, Rank, Square},
+    square::{File, Square, Rank},
 };
-
-const BETWEEN_LOOKUP: [[Bitboard; 64]; 64] = generate_between_lookup();
-const BETWEEN_RAY_LOOKUP: [[Bitboard; 64]; 64] = generate_between_ray_lookup();
-const KING_LOOKUP: [Bitboard; 64] = generate_king_lookup();
-const KNIGHT_LOOKUP: [Bitboard; 64] = generate_knight_lookup();
-const PAWN_CAPTURE_LOOKUP: [[Bitboard; 64]; 2] = generate_pawn_capture_lookup();
-
-// This would be so nice but the rook lookup takes ~45-55 seconds to evaluate to currently sticking to build script
-// #[allow(long_running_const_eval)]
-// const BISHOP_LOOKUP: [Bitboard; BISHOP_LOOKUP_LEN] = BISHOP.generate_lookup(&BISHOP_MAGIC);
-// #[allow(long_running_const_eval)]
-// const ROOK_LOOKUP: [Bitboard; ROOK_LOOKUP_LEN] = ROOK.generate_lookup(&ROOK_MAGIC);
 
 #[derive(Debug, Clone, Copy)]
 pub struct Board {
@@ -87,39 +79,6 @@ impl Board {
         moves
     }
 
-    fn xrays(
-        magics: &[Magic],
-        lookup: &[Bitboard],
-        sq: &Square,
-        mut blockers: Bitboard,
-    ) -> Bitboard {
-        let magic = &magics[sq.idx()];
-        blockers &= magic.mv_mask;
-        let attacks = lookup[get_magic_idx(magic, blockers)];
-        blockers & (blockers ^ attacks)
-    }
-
-    fn rook_xrays(sq: &Square, blockers: Bitboard) -> Bitboard {
-        Self::xrays(&ROOK_MAGIC, &ROOK_LOOKUP, sq, blockers)
-    }
-
-    fn bishop_xrays(sq: &Square, blockers: Bitboard) -> Bitboard {
-        Self::xrays(&BISHOP_MAGIC, &BISHOP_LOOKUP, sq, blockers)
-    }
-
-    fn rays(magics: &[Magic], sq: &Square) -> Bitboard {
-        let magic = &magics[sq.idx()];
-        magic.mv_mask
-    }
-
-    fn rook_rays(sq: &Square) -> Bitboard {
-        Self::rays(&ROOK_MAGIC, sq)
-    }
-
-    fn bishop_rays(sq: &Square) -> Bitboard {
-        Self::rays(&BISHOP_MAGIC, sq)
-    }
-
     fn generate_castling_moves<T>(&mut self, color: &Color, mut callback: T)
     where
         T: FnMut(&mut Self, &Move),
@@ -135,7 +94,7 @@ impl Board {
             let rook_dest_sq = Square::from_rank_file(Rank::First.pov(color), rook_dest_file);
             let king_dest_sq = Square::from_rank_file(Rank::First.pov(color), king_dest_file);
 
-            let sqs_between = BETWEEN_LOOKUP[king_sq.idx()][rook_sq.idx()];
+            let sqs_between = sq_between(&king_sq, &rook_sq);
             let a1 = board.sq_is_attacked_by(&rook_dest_sq, !color);
             let a2 = board.sq_is_attacked_by(&king_dest_sq, !color);
 
@@ -151,9 +110,7 @@ impl Board {
                         } else {
                             MoveFlag::QueenSideCastles
                         },
-                        promotion: None,
-                        old_castling: board.state.castling,
-                        old_ep_file: board.state.ep_file,
+                        promotion: None
                     },
                 )
             }
@@ -177,15 +134,16 @@ impl Board {
     {
         let active_color = &self.state.active_color.clone();
         let opp_color = !active_color;
-        let self_king_sq_idx = self.pieces[active_color]
+        let self_king_sq = self.pieces[active_color]
             .king
             .clone()
             .next_sq()
-            .expect("king should always exist")
-            .idx();
+            .expect("king should always exist");
 
         let king_check_mask = match self.check_masks {
-            [Some((_, ray1, _)), Some((_, ray2, _))] => Some(!(ray1 | ray2)),
+            // Allow king to capture a checker if it is not in other checker's ray
+            // Checking if the piece is protected by a non checking piece happens later
+            [Some((sq1, ray1, _)), Some((sq2, ray2, _))] => Some((sq1.bitboard() & !ray2) | (sq2.bitboard() & !ray1) | !(ray1 | ray2)),
             [Some((sq, ray, _)), None] => Some(sq.bitboard() | !ray),
             [None, Some((sq, ray, _))] => Some(sq.bitboard() | !ray),
             [None, None] => None,
@@ -207,7 +165,7 @@ impl Board {
             Piece::King,
             active_color,
             opp_color,
-            self_king_sq_idx,
+            &self_king_sq,
             king_check_mask,
             &mut callback,
         );
@@ -220,7 +178,7 @@ impl Board {
                 self.generate_pawn_moves(
                     active_color,
                     opp_color,
-                    self_king_sq_idx,
+                    &self_king_sq,
                     block_check_mask,
                     &mut callback,
                 );
@@ -228,7 +186,7 @@ impl Board {
                     Piece::Queen,
                     active_color,
                     opp_color,
-                    self_king_sq_idx,
+                    &self_king_sq,
                     block_check_mask,
                     &mut callback,
                 );
@@ -236,7 +194,7 @@ impl Board {
                     Piece::Rook,
                     active_color,
                     opp_color,
-                    self_king_sq_idx,
+                    &self_king_sq,
                     block_check_mask,
                     &mut callback,
                 );
@@ -244,7 +202,7 @@ impl Board {
                     Piece::Bishop,
                     active_color,
                     opp_color,
-                    self_king_sq_idx,
+                    &self_king_sq,
                     block_check_mask,
                     &mut callback,
                 );
@@ -252,7 +210,7 @@ impl Board {
                     Piece::Knight,
                     active_color,
                     opp_color,
-                    self_king_sq_idx,
+                    &self_king_sq,
                     block_check_mask,
                     &mut callback,
                 );
@@ -260,47 +218,12 @@ impl Board {
         }
     }
 
-    fn get_king_moves(from: &Square) -> Bitboard {
-        KING_LOOKUP[from.idx()]
-    }
-
-    fn get_knight_moves(from: &Square) -> Bitboard {
-        KNIGHT_LOOKUP[from.idx()]
-    }
-
-    fn get_sliding_moves<const T: usize>(
-        from: &Square,
-        blockers: Bitboard,
-        magics: &[Magic; 64],
-        lookup: &[Bitboard; T],
-    ) -> Bitboard {
-        let magic = magics[from.idx()];
-        let moves = lookup[get_magic_idx(&magic, blockers)];
-        moves
-    }
-
-    fn get_bishop_moves(from: &Square, blockers: Bitboard) -> Bitboard {
-        Self::get_sliding_moves(from, blockers, &BISHOP_MAGIC, &BISHOP_LOOKUP)
-    }
-
-    fn get_rook_moves(from: &Square, blockers: Bitboard) -> Bitboard {
-        Self::get_sliding_moves(from, blockers, &ROOK_MAGIC, &ROOK_LOOKUP)
-    }
-
-    fn get_queen_moves(from: &Square, blockers: Bitboard) -> Bitboard {
-        Self::get_rook_moves(from, blockers) | Self::get_bishop_moves(from, blockers)
-    }
-
-    fn get_pawn_attacks(from: &Square, color: &Color) -> Bitboard {
-        PAWN_CAPTURE_LOOKUP[*color as usize][from.idx()]
-    }
-
     fn generate_any_moves<T>(
         &mut self,
         piece: Piece,
         active_color: &Color,
         opp_color: &Color,
-        self_king_sq_idx: usize,
+        self_king_sq: &Square,
         check_mask: Option<Bitboard>,
         mut callback: T,
     ) where
@@ -311,17 +234,8 @@ impl Board {
 
         let piece_bb = self.pieces[active_color][&piece];
 
-        let get_moves_bb = |from: &Square| match piece {
-            Piece::King => Self::get_king_moves(from),
-            Piece::Knight => Self::get_knight_moves(from),
-            Piece::Bishop => Self::get_bishop_moves(from, opp_all | self_all),
-            Piece::Rook => Self::get_rook_moves(from, opp_all | self_all),
-            Piece::Queen => Self::get_queen_moves(from, opp_all | self_all),
-            Piece::Pawn => unimplemented!("use generate_pawn_moves_instead"),
-        };
-
         for from in piece_bb {
-            let mut moves = get_moves_bb(&from) & !self_all;
+            let mut moves = self.get_attacks(&piece, active_color, &from) & !self_all;
 
             if let Some(check_mask) = check_mask {
                 moves &= check_mask;
@@ -337,7 +251,7 @@ impl Board {
             };
 
             if self.pinned.has_sq(from) {
-                moves &= BETWEEN_RAY_LOOKUP[from.idx()][self_king_sq_idx];
+                moves &= ray_between(&from, self_king_sq);
             }
             let mut move_caller = |board: &mut Self, to: Square, flag: MoveFlag| {
                 callback(
@@ -347,9 +261,7 @@ impl Board {
                         from,
                         to,
                         flag,
-                        promotion: None,
-                        old_castling: board.state.castling,
-                        old_ep_file: board.state.ep_file,
+                        promotion: None
                     },
                 );
             };
@@ -371,7 +283,7 @@ impl Board {
         &mut self,
         active_color: &Color,
         opp_color: &Color,
-        self_king_sq_idx: usize,
+        self_king_sq: &Square,
         check_mask: Option<Bitboard>,
         mut callback: T,
     ) where
@@ -392,9 +304,7 @@ impl Board {
                                 from,
                                 to,
                                 flag,
-                                promotion: Some(p),
-                                old_castling: board.state.castling,
-                                old_ep_file: board.state.ep_file,
+                                promotion: Some(p)
                             },
                         );
                     }
@@ -406,16 +316,14 @@ impl Board {
                             from,
                             to,
                             flag,
-                            promotion: None,
-                            old_castling: board.state.castling,
-                            old_ep_file: board.state.ep_file,
+                            promotion: None
                         },
                     );
                 }
             };
 
             let pin_mask = if self.pinned.has_sq(from) {
-                BETWEEN_RAY_LOOKUP[from.idx()][self_king_sq_idx]
+                ray_between(&from, &self_king_sq)
             } else {
                 Bitboard::FULL
             };
@@ -427,15 +335,15 @@ impl Board {
             let mask = pin_mask & check_mask;
 
             // no check mask for now because ep can capture checker without target square being in check mask
-            let captures = Self::get_pawn_attacks(&from, active_color) & pin_mask;
+            let captures = pawn_attacks(*active_color, &from) & pin_mask;
             if let Some(ep_file) = self.state.ep_file {
                 let to = Square::ep_move_sq(opp_color, ep_file);
                 let ep_pawn_sq = Square::ep_pawn_sq(opp_color, ep_file);
                 if captures.has_sq(to) && check_mask.has_sq(ep_pawn_sq) {
                     let opp_qr = self.pieces[opp_color].queen | self.pieces[opp_color].rook;
                     let mut can_capture = true;
-                    for ep_pinner_sq in BETWEEN_RAY_LOOKUP[self_king_sq_idx][from.idx()] & opp_qr {
-                        let mut ib_pieces = BETWEEN_LOOKUP[self_king_sq_idx][ep_pinner_sq.idx()]
+                    for ep_pinner_sq in ray_between(self_king_sq, &from) & opp_qr {
+                        let mut ib_pieces = sq_between(self_king_sq, &ep_pinner_sq)
                             & (self_all | opp_all);
                         let rel_pieces = (ib_pieces.next(), ib_pieces.next_sq(), ib_pieces.next_sq());
                         
@@ -479,7 +387,7 @@ impl Board {
                     Color::White => 16,
                     Color::Black => -16,
                 });
-                if ((BETWEEN_LOOKUP[from.idx()][to.idx()] | to.bitboard()) & (opp_all | self_all))
+                if ((sq_between(&from, &to) | to.bitboard()) & (opp_all | self_all))
                     .is_empty()
                     && mask.has_sq(to)
                 {
@@ -519,11 +427,11 @@ impl Board {
         let self_qr = self.pieces[color].queen | self.pieces[color].rook;
 
         let rays =
-            (self_qr & Self::rook_rays(&opp_king_sq)) | (self_qb & Self::bishop_rays(&opp_king_sq));
+            (self_qr & rook_rays(&opp_king_sq)) | (self_qb & bishop_rays(&opp_king_sq));
 
         for ray_sq in rays {
-            let ray = BETWEEN_RAY_LOOKUP[ray_sq.idx()][opp_king_sq.idx()];
-            let in_between = BETWEEN_LOOKUP[ray_sq.idx()][opp_king_sq.idx()];
+            let ray = ray_between(&ray_sq, &opp_king_sq);
+            let in_between = sq_between(&ray_sq, &opp_king_sq);
             let pinned = in_between & (opp_all | self_all);
 
             match pinned.sq_count() {
@@ -550,12 +458,12 @@ impl Board {
     fn get_attacks(&self, piece: &Piece, color: &Color, sq: &Square) -> Bitboard {
         let blockers = self.pieces[color].all | self.pieces[!color].all;
         match piece {
-            Piece::Pawn => Self::get_pawn_attacks(sq, color),
-            Piece::Knight => Self::get_knight_moves(sq),
-            Piece::Bishop => Self::get_bishop_moves(sq, blockers),
-            Piece::Rook => Self::get_rook_moves(sq, blockers),
-            Piece::Queen => Self::get_queen_moves(sq, blockers),
-            Piece::King => Self::get_king_moves(sq),
+            Piece::Pawn => pawn_attacks(*color, sq),
+            Piece::Knight => knight_moves(sq),
+            Piece::Bishop => bishop_moves(sq, blockers),
+            Piece::Rook => rook_moves(sq, blockers),
+            Piece::Queen => queen_moves(sq, blockers),
+            Piece::King => king_moves(sq),
         }
     }
 
@@ -615,7 +523,7 @@ impl Board {
             Some(Promotion::Bishop) => self.toggle_sq(active_color, &Piece::Bishop, &mv.to),
             Some(Promotion::Knight) => {
                 self.toggle_sq(active_color, &Piece::Knight, &mv.to);
-                let moves = Self::get_knight_moves(&mv.to);
+                let moves = knight_moves(&mv.to);
                 if !(moves & self.pieces[opp_color].king).is_empty() {
                     self.add_checker((mv.to, moves, None));
                 }
@@ -663,13 +571,13 @@ impl Board {
                 }
             }
             Piece::Knight => {
-                let moves = Self::get_knight_moves(&mv.to);
+                let moves = knight_moves(&mv.to);
                 if !(moves & self.pieces[opp_color].king).is_empty() {
                     self.add_checker((mv.to, moves, None));
                 }
             }
             Piece::Pawn => {
-                let moves = Self::get_pawn_attacks(&mv.to, active_color);
+                let moves = pawn_attacks(*active_color, &mv.to);
                 if !(moves & self.pieces[opp_color].king).is_empty() {
                     self.add_checker((mv.to, moves, None));
                 }
@@ -685,66 +593,6 @@ impl Board {
             self.state.full_move_count += 1;
         }
         self.state.active_color = *opp_color;
-    }
-
-    fn unmake_move(&mut self, mv: &Move) {
-        self.check_masks = [None, None];
-        let opp_color = &self.state.active_color.clone();
-        let undoing_color = !opp_color;
-
-        self.toggle_sq(&undoing_color, &mv.piece, &mv.from);
-
-        match mv.promotion {
-            Some(Promotion::Queen) => self.toggle_sq(&undoing_color, &Piece::Queen, &mv.to),
-            Some(Promotion::Rook) => self.toggle_sq(&undoing_color, &Piece::Rook, &mv.to),
-            Some(Promotion::Bishop) => self.toggle_sq(&undoing_color, &Piece::Bishop, &mv.to),
-            Some(Promotion::Knight) => self.toggle_sq(&undoing_color, &Piece::Knight, &mv.to),
-            None => self.toggle_sq(&undoing_color, &mv.piece, &mv.to),
-        }
-
-        match &mv.flag {
-            MoveFlag::None => {}
-            MoveFlag::Capture(piece) => self.toggle_sq(opp_color, &piece, &mv.to),
-            MoveFlag::PawnFirstMove => {}
-            MoveFlag::EnPassant => self.toggle_sq(
-                opp_color,
-                &Piece::Pawn,
-                &Square::ep_pawn_sq(opp_color, mv.to.file()),
-            ),
-            MoveFlag::KingSideCastles => self.toggle_kingside_castles(&undoing_color),
-            MoveFlag::QueenSideCastles => self.toggle_queenside_castles(&undoing_color),
-        }
-
-        match &mv.piece {
-            Piece::King => {
-                let moves = Self::get_knight_moves(&mv.from);
-
-                for checker_sq in moves & self.pieces[opp_color].knight {
-                    self.add_checker((checker_sq, Self::get_knight_moves(&checker_sq), None));
-                }
-
-                let moves = Self::get_pawn_attacks(&mv.from, &undoing_color);
-
-                for checker_sq in moves & self.pieces[opp_color].pawn {
-                    self.add_checker((
-                        checker_sq,
-                        Self::get_pawn_attacks(&mv.from, opp_color),
-                        None,
-                    ));
-                }
-            }
-            _ => {}
-        }
-
-        self.update_slider_checks_pins(opp_color);
-
-        self.state.castling = mv.old_castling;
-        self.state.ep_file = mv.old_ep_file;
-        self.state.half_move_count -= 1;
-        if *undoing_color == Color::Black {
-            self.state.full_move_count -= 1;
-        }
-        self.state.active_color = *undoing_color;
     }
 
     fn generate_moves_recursively<F>(&mut self, max_ply: u8, current_ply: u8, on_move: &mut F)
@@ -769,27 +617,74 @@ impl Board {
         };
         self.generate_moves_recursively(ply, 1, &mut on_move)
     }
+    
+    pub fn perft_multithread(&mut self, ply: u8, thread_count: usize) -> usize {
+        let mut moves = Vec::with_capacity(30);
+        let mut total = 0;
+        let start = std::time::Instant::now();
+        let get_first_moves = |_: &mut Self, mv: &Move| {
+            moves.push(*mv);
+        };
+        
+        self.generate_moves(get_first_moves);
+        
+        for moves in moves.chunks(thread_count) {
+            let mut threads = Vec::with_capacity(thread_count);
+            for mv in moves {
+                let mut board = self.clone();
+                let mv = *mv;
+                threads.push((mv, thread::spawn(move||{
+                    let mut mv_total = 0;
+                    board.make_move(&mv);
+                    if ply >= 2 {
+                        let mut on_move = |_: &mut Self, _: &Move, current_ply: u8| {
+                            if &current_ply == &ply {
+                                mv_total+=1;
+                            }
+                        };
+                        board.generate_moves_recursively(ply, 2, &mut on_move)
+                    }
+                    
+                    match mv_total {
+                        0 if ply == 1 => 1,
+                        t => t
+                    }
+                })));
+            }
+            for (mv, t) in threads {
+                let mv_total=t.join().expect("joining thread is fine");
+                println!("{}: {}", mv.to_string(), mv_total);
+                total+=mv_total;
+            }
+        }
+        let end = start.elapsed();
+        let m_moves_per_sec = 10f64.powf(-6.0) * total as f64/end.as_secs_f64();
+        println!("Total: {}", total);
+        println!("Million moves/sec: {}", m_moves_per_sec);
+        println!("Million moves/sec/thread ({thread_count} threads): {}", m_moves_per_sec/thread_count as f64);
+        total
+    }
 
-    pub fn count(&mut self, ply: u8) -> (HashMap<String, usize>, usize) {
-        let mut moves: HashMap<String, usize> = HashMap::with_capacity(20);
+    pub fn perft(&mut self, ply: u8) -> usize {
         let mut curr_move: Option<(String, usize)> = None;
+        let mut total = 0;
         let start = std::time::Instant::now();
         let mut on_move = |_: &mut Self, mv: &Move, current_ply: u8| {
             // println!("{}{}", "  ".repeat(current_ply as usize), mv.to_string());
             if let Some((mv, count)) = &mut curr_move {
                 if current_ply == 1 {
-                    moves.insert(
-                        mv.to_string(),
-                        match count {
-                            0 => 1,
-                            c => *c,
-                        },
-                    );
+                    let count = match count {
+                        0 => 1,
+                        c => *c,
+                    };
+                    println!("{}: {}", mv, count);
+                    total+=count;
+                    curr_move = None;
                 } else if current_ply == ply {
                     *count += 1;
                 }
-            }
-            if current_ply == 1 {
+            } 
+            if curr_move.is_none() {
                 curr_move = Some((mv.to_string(), 0))
             }
         };
@@ -797,30 +692,18 @@ impl Board {
         self.generate_moves_recursively(ply, 1, &mut on_move);
 
         if let Some((mv, count)) = curr_move {
-            moves.insert(
-                mv.to_string(),
-                match count {
-                    0 => 1,
-                    c => c,
-                },
-            );
+            let count = match count {
+                0 => 1,
+                c => c,
+            };
+            println!("{}: {}", mv, count);
+            total+=count;
         }
         
         let end = start.elapsed();
-        
-        
-
-        let (to_print, total_count) =
-            moves
-                .iter()
-                .fold((String::new(), 0), |mut acc, (mv, count)| {
-                    acc.0 += &format!("{}: {}\n", mv, count);
-                    acc.1 += count;
-                    acc
-                });
-        println!("{}\nTotal: {}", to_print, total_count);
-        println!("Million moves/sec: {}", 10f64.powf(-6.0) * total_count as f64/end.as_secs_f64());
-        (moves, total_count)
+        println!("Total: {}", total);
+        println!("Million moves/sec: {}", 10f64.powf(-6.0) * total as f64/end.as_secs_f64());
+        total
     }
 
     pub fn pretty_print(&self, should_erase: bool) {
@@ -874,103 +757,18 @@ impl Board {
 
 #[cfg(test)]
 mod tests {
-    use chess_macro::make_bitboard;
-    use util::{bitboard::Bitboard, square::Square};
-
-    use crate::board::{Board, BISHOP_LOOKUP, BISHOP_MAGIC, ROOK_LOOKUP};
-
-    #[test]
-    fn moves() {}
-
-    #[test]
-    fn xrays1() {
-        let blockers = make_bitboard!(
-            . . . . X . . .
-            . . . X . . . .
-            X . X . . . . .
-            . . . . . . . .
-            . . . . . . . .
-            . . . . . . . .
-            . . . . . . . .
-            . . . . . . . .
-        );
-        let expected = make_bitboard!(
-            . . . . X . . .
-            . . . X . . . .
-            . . . . . . . .
-            . . . . . . . .
-            . . . . . . . .
-            . . . . . . . .
-            . . . . . . . .
-            . . . . . . . .
-        );
-        let res = Board::bishop_xrays(&Square::B5, blockers);
-        println!("RES {}", res);
-        assert_eq!(expected, res);
-    }
-
-    #[test]
-    fn xrays2() {
-        let blockers = make_bitboard!(
-            . . X . . . . .
-            . . . X . . . .
-            . . . . X . . .
-            . . . . . . . .
-            . . . . X . X .
-            . . . X . . . X
-            . . X . . . . .
-            . X . . . . . .
-        );
-        let expected = make_bitboard!(
-            . . X . . . . .
-            . . . X . . . .
-            . . . . . . . .
-            . . . . . . . .
-            . . . . . . . .
-            . . . X . . . X
-            . . X . . . . .
-            . X . . . . . .
-        );
-        let res = Board::bishop_xrays(&Square::F5, blockers);
-        println!("RES {}", res);
-        assert_eq!(expected, res);
-    }
-
-    #[test]
-    fn xrays3() {
-        let blockers = make_bitboard!(
-            . . . . X . . .
-            . . . . . . . .
-            . . . . X . . .
-            . . . . . . . .
-            . . . . X . . .
-            . X X X . X . X
-            . . . . . . . .
-            . . . . . . . .
-        );
-        let expected = make_bitboard!(
-            . . . . X . . .
-            . . . . . . . .
-            . . . . X . . .
-            . . . . . . . .
-            . . . . . . . .
-            . X X . . . . X
-            . . . . . . . .
-            . . . . . . . .
-        );
-        let res = Board::rook_xrays(&Square::E3, blockers);
-        println!("RES {}", res);
-        assert_eq!(expected, res);
-    }
+    use crate::board::Board;
 
     #[test]
     fn starting_pos() {
         let mut board = Board::default();
-        assert_eq!(board.count(1).1, 20);
-        assert_eq!(board.count(2).1, 400);
-        assert_eq!(board.count(3).1, 8902);
-        assert_eq!(board.count(4).1, 197281);
-        assert_eq!(board.count(5).1, 4865609)
+        assert_eq!(board.perft_multithread(1, 8), 20);
+        assert_eq!(board.perft_multithread(2, 8), 400);
+        assert_eq!(board.perft_multithread(3, 8), 8_902);
+        assert_eq!(board.perft_multithread(4, 8), 197_281);
+        assert_eq!(board.perft_multithread(5, 8), 4_865_609);
+        assert_eq!(board.perft_multithread(6, 8), 119_060_324);
+        assert_eq!(board.perft_multithread(7, 8), 3_195_901_860);
     }
 
     // See https://www.chessprogramming.org/Perft_Results for positions
@@ -979,22 +777,27 @@ mod tests {
         let mut board =
             Board::from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq -")
                 .expect("kiwipete pos is valid");
-        assert_eq!(board.count(1).1, 48);
-        assert_eq!(board.count(2).1, 2039);
-        assert_eq!(board.count(3).1, 97862);
-        assert_eq!(board.count(4).1, 4085603);
-        assert_eq!(board.count(5).1, 193690690);
+        assert_eq!(board.perft_multithread(1, 8), 48);
+        assert_eq!(board.perft_multithread(2, 8), 2_039);
+        assert_eq!(board.perft_multithread(3, 8), 97_862);
+        assert_eq!(board.perft_multithread(4, 8), 4_085_603);
+        assert_eq!(board.perft_multithread(5, 8), 193_690_690);
+        assert_eq!(board.perft_multithread(6, 8), 8_031_647_685);
     }
+
 
     #[test]
     fn position_3() {
         let mut board =
             Board::from_fen("8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - -").expect("test pos 3 is valid");
-        assert_eq!(board.count(1).1, 14);
-        assert_eq!(board.count(2).1, 191);
-        assert_eq!(board.count(3).1, 2812);
-        assert_eq!(board.count(4).1, 43238);
-        assert_eq!(board.count(5).1, 674624);
+        assert_eq!(board.perft_multithread(1, 8), 14);
+        assert_eq!(board.perft_multithread(2, 8), 191);
+        assert_eq!(board.perft_multithread(3, 8), 2_812);
+        assert_eq!(board.perft_multithread(4, 8), 43_238);
+        assert_eq!(board.perft_multithread(5, 8), 674_624);
+        assert_eq!(board.perft_multithread(6, 8), 11_030_083);
+        assert_eq!(board.perft_multithread(7, 8), 178_633_661);
+        // assert_eq!(board.perft_multithread(8, 8), 3_009_794_393);
     }
 
     #[test]
@@ -1002,11 +805,12 @@ mod tests {
         let mut board =
             Board::from_fen("r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1")
                 .expect("test pos 4 is valid");
-        assert_eq!(board.count(1).1, 6);
-        assert_eq!(board.count(2).1, 264);
-        assert_eq!(board.count(3).1, 9467);
-        assert_eq!(board.count(4).1, 422333);
-        assert_eq!(board.count(5).1, 15833292);
+        assert_eq!(board.perft_multithread(1, 8), 6);
+        assert_eq!(board.perft_multithread(2, 8), 264);
+        assert_eq!(board.perft_multithread(3, 8), 9_467);
+        assert_eq!(board.perft_multithread(4, 8), 422_333);
+        assert_eq!(board.perft_multithread(5, 8), 15_833_292);
+        assert_eq!(board.perft_multithread(6, 8), 706_045_033);
     }
 
     #[test]
@@ -1014,10 +818,36 @@ mod tests {
         let mut board =
             Board::from_fen("rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8")
                 .expect("test pos 5 is valid");
-        assert_eq!(board.count(1).1, 44);
-        assert_eq!(board.count(2).1, 1486);
-        assert_eq!(board.count(3).1, 62379);
-        assert_eq!(board.count(4).1, 2103487);
-        assert_eq!(board.count(5).1, 89941194)
+        assert_eq!(board.perft_multithread(1, 8), 44);
+        assert_eq!(board.perft_multithread(2, 8), 1_486);
+        assert_eq!(board.perft_multithread(3, 8), 62_379);
+        assert_eq!(board.perft_multithread(4, 8), 2_103_487);
+        assert_eq!(board.perft_multithread(5, 8), 89_941_194);
+    }
+    
+    #[test]
+    fn talkchess() {
+        // see https://www.chessprogramming.net/perfect-perft/
+        const PERFTS: &[(&str, u8, usize)] = &[
+            ("3k4/3p4/8/K1P4r/8/8/8/8 b - - 0 1", 6, 1_134_888),
+            ("8/8/4k3/8/2p5/8/B2P2K1/8 w - - 0 1", 6, 1_015_133),
+            ("8/8/1k6/2b5/2pP4/8/5K2/8 b - d3 0 1", 6, 1_440_467),
+            ("5k2/8/8/8/8/8/8/4K2R w K - 0 1", 6, 661_072),
+            ("3k4/8/8/8/8/8/8/R3K3 w Q - 0 1", 6, 803_711),
+            ("r3k2r/1b4bq/8/8/8/8/7B/R3K2R w KQkq - 0 1", 4, 1_274_206),
+            ("r3k2r/8/3Q4/8/8/5q2/8/R3K2R b KQkq - 0 1", 4, 1_720_476),
+            ("2K2r2/4P3/8/8/8/8/8/3k4 w - - 0 1", 6, 3_821_001),
+            ("8/8/1P2K3/8/2n5/1q6/8/5k2 b - - 0 1", 5, 1_004_658),
+            ("4k3/1P6/8/8/8/8/K7/8 w - - 0 1", 6, 217_342),
+            ("8/P1k5/K7/8/8/8/8/8 w - - 0 1", 6, 92_683),
+            ("K1k5/8/P7/8/8/8/8/8 w - - 0 1", 6, 2_217),
+            ("8/8/2k5/5q2/5n2/8/5K2/8 b - - 0 1", 4, 23_527),
+            ("8/k1P5/8/1K6/8/8/8/8 w - - 0 1", 7, 567_584)
+        ];
+
+        for (i, (fen, depth, move_count)) in PERFTS.iter().enumerate() {
+            let mut board = Board::from_fen(fen).expect("fen is valid");
+            assert_eq!(board.perft_multithread(*depth, 8), *move_count, "failed pos {i} with fen {fen}")
+        }
     }
 }

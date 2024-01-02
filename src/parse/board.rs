@@ -116,7 +116,6 @@ impl BothColors<PieceBitboards> {
                     return Err(too_many_sqs);
                 }
             }
-            println!("FILE {:?}", file);
             if file != File::H {
                 return Err(ChessError::Parse(format!(
                     "Rank {:?} ({rank_str}) has too few squares",
@@ -189,7 +188,6 @@ impl State {
 impl BothColors<Castling> {
     fn from_str(input: &str) -> Result<Self, ChessError> {
         let mut castling = Self::default();
-        let mut chars = input.chars();
         let w = &Color::White;
         let b = &Color::Black;
         let err = ChessError::Parse(format!("Castling input '{input}' is invalid"));

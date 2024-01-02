@@ -1,4 +1,5 @@
 pub mod board;
+pub mod movegen;
 pub mod both_colors;
 pub mod cli;
 pub mod mv;

@@ -19,8 +19,11 @@ pub enum Command {
     Position {
         fen: String,
     },
-    Count {
+    Perft {
         ply: u8,
+        fen: Option<String>,
+        #[arg(short, long)]
+        thread_count: Option<usize> 
     },
     Play {
         ply: u8,
@@ -41,8 +44,21 @@ pub enum Command {
 
 pub fn handle_command(cmd: Command, board: &mut Board) {
     match cmd {
-        Command::Count { ply } => {
-            board.count(ply);
+        Command::Perft { ply, fen, thread_count } => {
+            if let Some(fen) = fen {
+                *board = match Board::from_fen(&fen) {
+                    Ok(b) => b,
+                    Err(err) => {
+                        println!("Error: {:?}", err);
+                        return;
+                    }
+                }
+            }
+            if let Some(thread_count) = thread_count {
+                board.perft_multithread(ply, thread_count);
+            } else {
+                board.perft(ply);
+            }
         }
         Command::Play { ply, frame_time } => {
             board.play(ply, frame_time);

@@ -1,8 +1,5 @@
 extern crate proc_macro;
-use proc_macro::{
-    Group, TokenStream,
-    TokenTree::{self, Literal},
-};
+use proc_macro::{TokenStream, TokenTree};
 
 #[proc_macro]
 pub fn make_ranks_files_squares(_: TokenStream) -> TokenStream {
