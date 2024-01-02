@@ -1,0 +1,9 @@
+[package]
+name = "view"
+version = "0.1.0"
+edition = "2021"
+
+
+[dependencies]
+leptos = { version = "0.5.4", features = ["csr"] }
+movegen = { version = "0.1.0", path = "../movegen" }

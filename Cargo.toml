@@ -1,24 +1,8 @@
 [workspace]
 members = [
     "util",
-    "chess_macro"
+    "chess_macro",
+    "movegen",
+    "view"
 ]
 resolver = "2"
-
-[package]
-name = "chess"
-version = "0.1.0"
-edition = "2021"
-build = "lookup_gen/main.rs"
-lto = true
-
-[build-dependencies]
-util = { version = "0.1.0", path = "./util" }
-
-[dependencies]
-util = { version = "0.1.0", path = "./util" }
-chess_macro = { version = "0.1.0", path = "chess_macro" }
-clap = { version = "4.4.11", features = ["derive"] }
-
-
-
