@@ -1,3 +1,5 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use crate::{bitboard::Bitboard, square::Square};
 
 #[derive(Debug, Clone, Copy)]
@@ -46,21 +48,25 @@ pub const DELTAS: [(i8, i8); 8] = [
 
  const DIAGONALS: [(i8, i8); 4] = [DELTAS[4], DELTAS[5], DELTAS[6], DELTAS[7]];
 
-pub struct Random(pub u64, pub u64);
+ pub struct Rand(u64, u64);
 
-impl Random {
-    /// see https://en.wikipedia.org/wiki/Xorshift#xorshift+
-    fn next(&mut self) -> u64 {
-        let mut t = self.0;
-        let s = self.1;
-        self.0 = s;
-        t ^= t << 23;
-        t ^= t >> 18;
-        t ^= s ^ (s >> 5);
-        self.1 = t;
-        return t.wrapping_add(s);
-    }
-}
+ impl Rand {
+     fn new() -> Self {
+         let t = SystemTime::now().duration_since(UNIX_EPOCH).expect("systemtime is fine").subsec_nanos() as u64;
+         Self(t, t)
+     }
+     /// see https://en.wikipedia.org/wiki/Xorshift#xorshift+
+     fn next(&mut self) -> u64 {
+         let mut t = self.0;
+         let s = self.1;
+         self.0 = s;
+         t ^= t << 23;
+         t ^= t >> 18;
+         t ^= s ^ (s >> 5);
+         self.1 = t;
+         return t.wrapping_add(s);
+     }
+ }
 
 pub struct MagicPiece<const LOOKUP_LEN: usize> {
     deltas: [(i8, i8); 4],
@@ -104,7 +110,7 @@ impl<const LOOKUP_LEN: usize> MagicPiece<LOOKUP_LEN> {
         let mut magic_code = format!("\npub const {}_MAGIC: [Magic; 64] = [\n", self.piece_name);
         let mut lookup_code = String::new();
         let mut curr_offset = 0;
-        let mut rand = Random(1, 1);
+        let mut rand = Rand::new();
         for sq in Square::ALL {
             let (lookup, magic) = match precomputed_magics {
                 Some(magics) => {
@@ -206,7 +212,7 @@ impl<const LOOKUP_LEN: usize> MagicPiece<LOOKUP_LEN> {
         &self,
         sq: &Square,
         offset: usize,
-        rand: &mut Random,
+        rand: &mut Rand,
     ) -> (Vec<Bitboard>, Magic) {
         let mask = self.mask(&sq);
         let mv_mask = self.moves(&sq, &Bitboard::EMPTY);

@@ -1,13 +1,12 @@
 use std::{collections::HashSet, fs, io};
 
-use chess::{
+use movegen::{
     board::Board,
     cli::{handle_command, split_ignore_quotes, Cli, Command},
 };
 use clap::Parser;
 
 fn main() {
-    _stockfish_diff();
     let args = Cli::parse();
     let mut board = Board::default();
 
@@ -34,29 +33,4 @@ fn main() {
         },
         cmd => handle_command(cmd, &mut board),
     };
-}
-
-fn _stockfish_diff() {
-    let file = fs::read_to_string("input.txt").expect("file is valid");
-    let mut joni = HashSet::new();
-    let mut insert_into_stockfish = false;
-    let mut stockfish = HashSet::new();
-    for line in file.split("\n") {
-        if line.is_empty() {
-            insert_into_stockfish = true;
-            continue;
-        }
-        if let Some((m, c)) = line.split_once(": ") {
-            if let Ok(num) = c.parse::<usize>() {
-                if insert_into_stockfish {
-                    stockfish.insert((m, num));
-                } else {
-                    joni.insert((m, num));
-                }
-            }
-        }
-    }
-    println!("JONI HAS BUT SF NOT {:?}", joni.difference(&stockfish));
-    println!("BOTH HAVE {:?}", joni.intersection(&stockfish));
-    println!("SF HAS BUT JONI NOT {:?}", stockfish.difference(&joni));
 }

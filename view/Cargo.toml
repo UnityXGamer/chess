@@ -5,5 +5,7 @@ edition = "2021"
 
 
 [dependencies]
+engine = { version = "0.1.0", path = "../engine" }
 leptos = { version = "0.5.4", features = ["csr"] }
 movegen = { version = "0.1.0", path = "../movegen" }
+web-time = "0.2.4"

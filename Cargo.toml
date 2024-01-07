@@ -3,6 +3,7 @@ members = [
     "util",
     "chess_macro",
     "movegen",
-    "view"
+    "view",
+    "engine"
 ]
 resolver = "2"

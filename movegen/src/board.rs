@@ -40,19 +40,70 @@ impl Default for Board {
     }
 }
 
+#[derive(Debug)]
+pub enum Status {
+    Checkmate,
+    Stalemate,
+    Draw,
+    Ongoing(Vec<Move>)
+}
+
+
 impl Board {
     pub const WIDTH: u8 = 7;
+    
+    pub fn in_check(&self) -> bool {
+        match self.check_masks {
+            [None, None] => false,
+            _ => true
+        }
+    }
+    
+    pub fn status(&mut self) -> Status {
+        let moves = self.get_moves();
+        if moves.len() == 0 {
+            if self.in_check() {
+                Status::Checkmate
+            } else {
+                Status::Stalemate
+            }
+        } else {
+            Status::Ongoing(moves)
+        }
+    }
+    
+    pub fn all_sqs(&self, white_pov: bool) -> Vec<Vec<(Square, Option<(Color, Piece)>)>> {
+        let mut output = Vec::with_capacity(8);
+        
+        let iter = Rank::ALL.iter();
+        
+        let rank_callback = |rank: &Rank|{
+            output.push(Vec::with_capacity(8));
+            File::ALL.iter().for_each(|file|{
+                let sq = Square::from_rank_file(*rank, *file);
+                output.last_mut().expect("always has row").push((sq, self.get_sq(sq)))
+            })
+        };
+        
+        if white_pov {
+            iter.rev().for_each(rank_callback)
+        } else {
+            iter.for_each(rank_callback)
+        }
+        
+        output
+    }
 
-    pub fn get_sq(&self, sq: Square) -> Option<(Color, Piece)> {
+    fn get_sq(&self, sq: Square) -> Option<(Color, Piece)> {
         for piece in &Piece::ALL {
             let w = self.pieces[&Color::White][piece];
             let b = self.pieces[&Color::Black][piece];
 
-            if !(w & sq.bitboard()).is_empty() {
+            if w.has_sq(sq) {
                 return Some((Color::White, *piece));
             }
 
-            if !(b & sq.bitboard()).is_empty() {
+            if b.has_sq(sq) {
                 return Some((Color::Black, *piece));
             }
         }
@@ -83,6 +134,8 @@ impl Board {
     where
         T: FnMut(&mut Self, &Move),
     {
+
+        
         let blockers = self.pieces[color].all | self.pieces[!color].all;
         let mut move_caller = |board: &mut Self,
                                is_kingside: bool,

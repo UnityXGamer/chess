@@ -1,5 +1,5 @@
 use util::{magic::ROOK, precomputed::ROOK_MAGIC};
 
 fn main() {
-    let _ = ROOK.generate_lookup(&ROOK_MAGIC);
+    println!("{}",ROOK.get_magic_lookup_code(None, false));
 }
