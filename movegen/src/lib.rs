@@ -7,4 +7,4 @@ pub mod parse;
 pub mod piece_bb;
 pub mod state;
 
-pub use util::{square::{Rank, File, Square}, color::Color};
+pub use util::{square::{Rank, File, Square}, color::Color, error::ChessError};

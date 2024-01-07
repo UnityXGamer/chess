@@ -1,3 +1,5 @@
+use std::{fmt::{Write, format}, io::Empty};
+
 use util::{
     bitboard::Bitboard,
     color::Color,
@@ -14,6 +16,50 @@ use crate::{
 };
 
 impl Board {
+    pub fn fen(&self, url_encode: bool) -> String {
+        let mut fen = String::new();
+        for rank in self.all_sqs(true) {
+            let mut empty_number = 0;
+            for (_, piece) in rank {
+                if let Some((color, piece)) = piece {
+                    if empty_number > 0 {
+                        fen += &format!("{empty_number}");
+                        empty_number = 0;
+                    }
+                    let mut char = piece.to_char();
+                    if color == Color::White {
+                        char.make_ascii_uppercase()
+                    }
+                    fen += &format!("{char}");
+                } else {
+                    empty_number += 1;
+                }
+            }
+            if empty_number > 0 {
+                fen += &format!("{empty_number}");
+            }
+            fen += "/"
+        }
+        if fen.ends_with("/") {
+            fen.pop();
+        }
+
+        fen += &format!(" {}", self.state.active_color.to_fen());
+        fen += &format!(" {}", self.state.castling.to_fen());
+        fen += &format!(" {}", if let Some(ep_file) = self.state.ep_file {
+            Square::ep_move_sq(&self.state.active_color, ep_file).to_string()
+        } else {
+            "-".to_string()
+        });
+        fen+=&format!(" {}", self.state.half_move_count);
+        fen+=&format!(" {}", self.state.full_move_count);
+        
+        if url_encode {
+            fen = fen.replace(" ", "_");
+        }
+
+        fen
+    }
     /// see https://en.wikipedia.org/wiki/Forsyth%E2%80%93Edwards_Notation
     pub fn from_fen(input: &str) -> Result<Self, ChessError> {
         let mut fen_chunks: [&str; 6] = [""; 6];
@@ -203,5 +249,25 @@ impl BothColors<Castling> {
             }
         }
         Ok(castling)
+    }
+    fn to_fen(&self) -> String {
+        let mut output = String::new();
+        if self[&Color::White].king_side {
+            output += "K"
+        };
+        if self[&Color::White].king_side {
+            output += "Q"
+        };
+        if self[&Color::White].king_side {
+            output += "k"
+        };
+        if self[&Color::White].king_side {
+            output += "q"
+        };
+        if output.is_empty() {
+            "-".to_string()
+        } else {
+            output
+        }
     }
 }

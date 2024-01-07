@@ -13,6 +13,12 @@ impl Color {
             Self::Black
         }
     }
+    pub fn to_fen(&self) -> char {
+        match self {
+            Self::White => 'w',
+            Self::Black => 'b'
+        }
+    }
 }
 
 impl std::ops::Not for Color {
